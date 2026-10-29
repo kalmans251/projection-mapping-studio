@@ -99,7 +99,7 @@ private:
 class MainWindow final : public QMainWindow {
 public:
     MainWindow() {
-        setWindowTitle("Projection Mapping Studio — v0.1 Preview");
+        setWindowTitle("Projection Mapping Studio — v0.5");
         resize(1040, 660);
         auto* central = new QWidget;
         auto* root = new QVBoxLayout(central);
@@ -250,6 +250,39 @@ public:
         colorLayout->addWidget(new QLabel("Black-level mismatch cannot be eliminated by dimming. Test with dark content."));
         colorLayout->addStretch();
         tabs->addTab(colorTab,"Color & Blend");
+
+        auto* gpuTab = new QWidget;
+        auto* gpuLayout = new QVBoxLayout(gpuTab);
+        gpuLayout->addWidget(new QLabel("Direct3D 11 diagnostics — v0.5 foundation (NOT yet the video output backend)."));
+        auto* initGpu = new QPushButton("Initialize D3D11 hardware GPU");
+        auto* uploadToggle = new QCheckBox("Upload decoded video frames to a GPU texture (diagnostic)");
+        uploadToggle->setEnabled(false);
+        auto* gpuStatus = new QLabel("GPU not initialized");
+        gpuStatus->setWordWrap(true);
+        gpuLayout->addWidget(initGpu);
+        gpuLayout->addWidget(uploadToggle);
+        gpuLayout->addWidget(gpuStatus);
+        gpuLayout->addWidget(new QLabel("Projector output still uses the existing Qt renderer. GPU upload is optional and off by default."));
+        gpuLayout->addStretch();
+        tabs->addTab(gpuTab,"GPU diagnostics");
+        connect(initGpu,&QPushButton::clicked,this,[this,uploadToggle,gpuStatus] {
+            QString error;
+            if(!output_.initializeGpu(error)) {
+                QMessageBox::warning(this,"D3D11",error);
+                gpuStatus->setText(error);
+                return;
+            }
+            uploadToggle->setEnabled(true);
+            gpuStatus->setText(output_.gpuStatus());
+        });
+        connect(uploadToggle,&QCheckBox::toggled,this,[this](bool enabled){
+            output_.setGpuUploadEnabled(enabled);
+        });
+        auto* gpuTimer = new QTimer(this);
+        connect(gpuTimer,&QTimer::timeout,this,[this,gpuStatus]{
+            gpuStatus->setText(output_.gpuStatus());
+        });
+        gpuTimer->start(1000);
 
         auto refreshScreens = [this]() {
             const auto names=output_.screenDescriptions();

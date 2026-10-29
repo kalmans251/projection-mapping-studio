@@ -8,7 +8,9 @@ qt_standard_project_setup()
 qt_add_executable(ProjectionMappingStudio WIN32
     src/main.cpp
     src/OutputController.h
+    src/rendering/D3D11Engine.h
+    src/rendering/D3D11Engine.cpp
 )
-target_link_libraries(ProjectionMappingStudio PRIVATE Qt6::Widgets Qt6::Multimedia)
+target_link_libraries(ProjectionMappingStudio PRIVATE Qt6::Widgets Qt6::Multimedia d3d11 dxgi)
 set_target_properties(ProjectionMappingStudio PROPERTIES WIN32_EXECUTABLE TRUE)
 install(TARGETS ProjectionMappingStudio RUNTIME DESTINATION bin)

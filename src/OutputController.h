@@ -5,6 +5,7 @@
 #include <QtMultimedia/QVideoSink>
 #include <QtMultimedia/QVideoFrame>
 #include <array>
+#include "rendering/D3D11Engine.h"
 #include <algorithm>
 #include <cmath>
 
@@ -135,6 +136,13 @@ public:
             if(!frame.isValid()) return;
             const QImage image=frame.toImage();
             if(image.isNull()) return;
+            if(gpuUploadEnabled_) {
+                QString error;
+                if(!gpuEngine_.uploadFrame(image,error)) {
+                    gpuUploadEnabled_=false;
+                    gpuError_=error;
+                }
+            }
             for(auto* output:outputs_) output->setFrame(image);
         });
         connect(&player_,&QMediaPlayer::mediaStatusChanged,this,[this](QMediaPlayer::MediaStatus status){
@@ -188,6 +196,15 @@ public:
         }
         return true;
     }
+    bool initializeGpu(QString& error) {
+        const bool ok=gpuEngine_.initialize(error);
+        if(!ok) gpuError_=error;
+        return ok;
+    }
+    void setGpuUploadEnabled(bool enabled) { gpuUploadEnabled_=enabled && gpuEngine_.isReady(); }
+    QString gpuStatus() const {
+        return gpuError_.isEmpty() ? gpuEngine_.description() : "GPU error: "+gpuError_;
+    }
     void stopOutputs() { for(auto* output:outputs_) output->hide(); }
     void testPattern() { for(auto* output:outputs_) output->setTestMode(true); }
     void playFile(const QString& path) {
@@ -212,4 +229,7 @@ private:
     QMediaPlayer player_;
     QVideoSink sink_;
     bool loop_=true;
+    D3D11Engine gpuEngine_;
+    bool gpuUploadEnabled_=false;
+    QString gpuError_;
 };
