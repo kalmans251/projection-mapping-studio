@@ -1,28 +1,33 @@
 # Projection Mapping Studio
 
-Windows C++20 / Qt 6 멀티 프로젝터 맵핑 프로그램.
+Windows C++20 + Qt 6 멀티 프로젝터 맵핑 소프트웨어.
 
-## 현재 버전: v0.5 GPU 기반 구축
+## v0.6 — 실험적 Direct3D 11 출력
 
-기존 v0.4 기능(프로젝터 두 대에 영상 분할 출력, 4점 워핑, 겹침 페이드, RGB/감마, JSON 저장)을 유지합니다.
+기존 Qt CPU 출력 경로는 그대로 유지합니다. 새 GPU 경로는 아직 현장 검증 전입니다.
 
-새로 추가된 Direct3D 11 엔진 기반:
-- Microsoft D3D11 하드웨어 장치/컨텍스트 생성
-- 사용 GPU 어댑터 이름 및 feature level 진단
-- GPU 비디오 텍스처(BGRA) 및 Shader Resource View 생성
-- Qt Multimedia가 디코딩한 프레임을 GPU 텍스처에 선택적으로 업로드
-- 업로드 프레임 수와 전송량 표시
-- **GPU diagnostics** 탭에서 초기화/업로드 실험 수행
+- Direct3D 11 하드웨어 장치 및 비디오 텍스처 업로드
+- 두 프로젝터의 전용 QWindow에 각각 DXGI Swap Chain 생성
+- HLSL 픽셀 셰이더를 이용한 4점 역원근 워핑
+- 하나의 GPU 비디오 텍스처를 두 출력에서 공유
+- 겹침 폭, 밝기, 블렌딩 감마, RGB 감쇠를 GPU 출력에서 처리
+- 설정값 변경 시 GPU 화면 재렌더링
+- **GPU renderer** 탭에서 GPU 모드 선택. 기본값은 검증된 Qt CPU 렌더러
+- GPU 모드 전환 시 기존 출력 창을 닫고 사용자가 다시 열도록 처리
 
-**중요:** v0.5에서도 실제 프로젝터 출력은 기존 Qt QPainter 워핑/블렌딩 엔진이 담당합니다. Direct3D 텍스처 업로드는 별도 진단 기능이며, 아직 GPU 셰이더 출력 및 swap chain이 구현된 것은 아닙니다. 업로드를 켜면 CPU→GPU 전송이 추가되므로 성능이 좋아지지 않을 수 있습니다. 기본값은 꺼짐입니다.
+### 주의사항
 
-## 요구 환경
+- GPU 모드는 **실험 기능**입니다. 노트북·GPU·프로젝터 실제 조합에서는 별도 검증이 필요합니다.
+- 두 Swap Chain이 동일 디코딩 프레임을 사용하지만 **하드웨어 genlock/frame-lock은 지원하지 않습니다**. 순차 Present로 출력합니다.
+- Qt Multimedia 디코딩 결과를 GPU에 업로드하므로 하드웨어 디코딩의 완전한 zero-copy 파이프라인은 아닙니다.
+- 현재 디스플레이 변경 시 swap chain 자동 재생성, GPU 장치 손실 복구, 검은색 누설광 교정은 미구현입니다.
+- 기존 보정 JSON(v1/v2) 호환성을 유지합니다.
 
-- Windows 10/11 + MSVC 2022 x64 + Windows SDK
+## Windows 빌드
+
+- Visual Studio 2022 MSVC x64, Windows SDK
+- Qt 6.12.0 MSVC 2022 64-bit + Qt Multimedia
 - CMake 3.24+
-- Qt 6.5+ Widgets, Multimedia (예: Qt 6.12.0 MSVC 2022 64-bit)
-
-## 빌드
 
 ```powershell
 git pull origin main
@@ -32,19 +37,15 @@ cmake --build build --config Release
 .\build\Release\ProjectionMappingStudio.exe
 ```
 
-## GPU 진단
+## GPU 테스트 절차
 
-1. 프로그램 **GPU diagnostics** 탭 열기
-2. **Initialize D3D11 hardware GPU** 선택
-3. GPU 이름과 feature level 표시 확인
-4. (선택) GPU 텍스처 업로드 체크 후 영상 재생, 업로드 프레임 수 증가 확인
-5. 기본 프로젝터 출력에는 영향을 주지 않으며, 문제가 있으면 업로드 체크 해제
+1. 기존 CPU/Qt 모드에서 프로젝트 설정과 보정 JSON을 백업.
+2. **GPU renderer** → **Use experimental D3D11 renderer** 활성화.
+3. 출력 창이 닫히면 **Projectors** 탭에서 두 프로젝터를 선택하고 테스트 격자 열기.
+4. 두 화면에 격자가 표시되는지 확인. 워핑 보정점을 움직여 출력이 변형되는지 점검.
+5. **Media** 탭에서 MP4 재생 후 연결 영역을 확인.
+6. 문제가 있으면 GPU 모드를 해제하고 다시 Projectors에서 출력 창 열기 (Qt 렌더러 복귀).
 
-## 다음 로드맵
+## 향후 개발
 
-- v0.6: GPU swap chain 기반 프로젝터 렌더링, HLSL 워핑·블렌딩
-- v0.7: 디코딩·렌더링 스레드 및 프레임 타임라인
-- v0.8: 자동 실행, 디스플레이 재연결, 운영 설정
-- v0.9: 장시간 안정화·현장 품질 검증
-
-**현재 공개 저장소에는 명시적 소프트웨어 배포 라이선스를 아직 지정하지 않았습니다.**
+GPU 장치 손실/HDMI 재연결 복구, 프레임 타임스탬프·프레젠트 동기화, 디코딩/렌더링 분리, 장시간 무인 운영 테스트.

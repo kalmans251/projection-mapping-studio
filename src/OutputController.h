@@ -6,6 +6,7 @@
 #include <QtMultimedia/QVideoFrame>
 #include <array>
 #include "rendering/D3D11Engine.h"
+#include "rendering/D3D11Presenter.h"
 #include <algorithm>
 #include <cmath>
 
@@ -127,23 +128,56 @@ private:
     QImage grid_;
 };
 
+class GpuOutputWindow final : public QWindow {
+public:
+    GpuOutputWindow() { setFlags(Qt::Window | Qt::FramelessWindowHint); }
+protected:
+    void keyPressEvent(QKeyEvent* event) override {
+        if(event->key()==Qt::Key_Escape) { hide(); event->accept(); }
+        else QWindow::keyPressEvent(event);
+    }
+};
+
 class OutputController final : public QObject {
 public:
     OutputController() {
-        for(int i=0;i<2;++i) outputs_[i]=new ProjectionWindow(i);
+        for(int i=0;i<2;++i) {
+            outputs_[i]=new ProjectionWindow(i);
+            gpuWindows_[i]=new GpuOutputWindow;
+            gpuSettings_[i].quad << QPointF(.02,.02) << QPointF(.98,.02)
+                                 << QPointF(.98,.98) << QPointF(.02,.98);
+        }
+        gpuGrid_=QImage(1280,720,QImage::Format_RGB32);
+        gpuGrid_.fill(QColor("#17243b"));
+        {
+            QPainter painter(&gpuGrid_);
+            painter.setPen(QPen(QColor("#51718b"),2));
+            for(int x=0;x<=gpuGrid_.width();x+=80) painter.drawLine(x,0,x,gpuGrid_.height());
+            for(int y=0;y<=gpuGrid_.height();y+=80) painter.drawLine(0,y,gpuGrid_.width(),y);
+            painter.setPen(QPen(QColor("#00e5ff"),8));
+            painter.drawRect(gpuGrid_.rect().adjusted(8,8,-9,-9));
+        }
         player_.setVideoSink(&sink_);
         connect(&sink_,&QVideoSink::videoFrameChanged,this,[this](const QVideoFrame& frame){
             if(!frame.isValid()) return;
             const QImage image=frame.toImage();
             if(image.isNull()) return;
-            if(gpuUploadEnabled_) {
-                QString error;
-                if(!gpuEngine_.uploadFrame(image,error)) {
-                    gpuUploadEnabled_=false;
-                    gpuError_=error;
+            if(gpuMode_) {
+                if(!gpuTestMode_) {
+                    QString error;
+                    if(!gpuEngine_.uploadFrame(image,error)) gpuError_=error;
+                    else renderGpu();
                 }
+            } else {
+                if(gpuUploadEnabled_) {
+                    QString error;
+                    if(!gpuEngine_.uploadFrame(image,error)) {
+                        gpuUploadEnabled_=false;
+                        gpuError_=error;
+                    }
+                }
+                for(auto* output:outputs_) output->setFrame(image);
             }
-            for(auto* output:outputs_) output->setFrame(image);
         });
         connect(&player_,&QMediaPlayer::mediaStatusChanged,this,[this](QMediaPlayer::MediaStatus status){
             if(status==QMediaPlayer::EndOfMedia && loop_) {
@@ -154,6 +188,8 @@ public:
     }
     ~OutputController() override {
         player_.stop();
+        presenter_.detach();
+        for(auto* output:gpuWindows_) delete output;
         for(auto* output:outputs_) delete output;
     }
     static QList<QScreen*> screens() { return QGuiApplication::screens(); }
@@ -167,10 +203,45 @@ public:
         }
         return descriptions;
     }
+    bool setGpuMode(bool enabled,QString& error) {
+        if(enabled && !presenter_.initialize(error)) {
+            gpuError_=error; return false;
+        }
+        stopOutputs();
+        gpuMode_=enabled;
+        return true;
+    }
+    bool gpuMode() const { return gpuMode_; }
+    void renderGpu() {
+        if(!gpuMode_) return;
+        for(int i=0;i<2;++i) {
+            QString error;
+            if(!presenter_.render(i,gpuSettings_[i],error) && !error.isEmpty())
+                gpuError_=error;
+        }
+    }
     bool showOutputs(int first,int second,QString& error) {
         auto list=screens();
         if(first<0||second<0||first>=list.size()||second>=list.size()||first==second) {
             error="Select two different, connected displays."; return false;
+        }
+        if(gpuMode_) {
+            for(auto* output:outputs_) output->hide();
+            for(auto* window:gpuWindows_) window->hide();
+            presenter_.detach();
+            for(int i=0;i<2;++i) {
+                QScreen* screen=list[i==0?first:second];
+                auto* window=gpuWindows_[i];
+                window->setScreen(screen);
+                window->setGeometry(screen->geometry());
+                window->show();
+                window->setGeometry(screen->geometry());
+                if(!presenter_.attach(i,reinterpret_cast<HWND>(window->winId()),window->size(),error)) {
+                    stopOutputs();return false;
+                }
+            }
+            testPattern();
+            return true;
         }
         // Windows can choose the primary display for showFullScreen() when the
         // QWidget's native handle was created on another monitor. Instead,
@@ -205,24 +276,56 @@ public:
     QString gpuStatus() const {
         return gpuError_.isEmpty() ? gpuEngine_.description() : "GPU error: "+gpuError_;
     }
-    void stopOutputs() { for(auto* output:outputs_) output->hide(); }
-    void testPattern() { for(auto* output:outputs_) output->setTestMode(true); }
+    void stopOutputs() {
+        for(auto* output:outputs_) output->hide();
+        for(auto* window:gpuWindows_) window->hide();
+        presenter_.detach();
+    }
+    void testPattern() {
+        if(gpuMode_) {
+            gpuTestMode_=true;
+            QString error;
+            if(!gpuEngine_.uploadFrame(gpuGrid_,error)) gpuError_=error;
+            else renderGpu();
+        } else for(auto* output:outputs_) output->setTestMode(true);
+    }
     void playFile(const QString& path) {
-        for(auto* output:outputs_) output->setTestMode(false);
+        if(gpuMode_) gpuTestMode_=false;
+        else for(auto* output:outputs_) output->setTestMode(false);
         player_.setSource(QUrl::fromLocalFile(path));
         player_.play();
     }
     void pause() { player_.pause(); }
     void stop() { player_.stop(); }
     void setLoop(bool enabled) { loop_=enabled; }
-    void setOverlap(int percent) { for(auto* output:outputs_) output->setOverlapPercent(percent); }
-    void setBrightness(int percent) { for(auto* output:outputs_) output->setBrightnessPercent(percent); }
-    void setBlendGamma(double gamma) { for(auto* output:outputs_) output->setBlendGamma(gamma); }
+    void setOverlap(int percent) {
+        for(auto* output:outputs_) output->setOverlapPercent(percent);
+        for(auto& settings:gpuSettings_) settings.overlap=percent;
+        renderGpu();
+    }
+    void setBrightness(int percent) {
+        for(auto* output:outputs_) output->setBrightnessPercent(percent);
+        for(auto& settings:gpuSettings_) settings.brightness=percent;
+        renderGpu();
+    }
+    void setBlendGamma(double gamma) {
+        for(auto* output:outputs_) output->setBlendGamma(gamma);
+        for(auto& settings:gpuSettings_) settings.blendGamma=gamma;
+        renderGpu();
+    }
     void setRgbGain(int channel,int r,int g,int b) {
-        if(channel>=0 && channel<2) outputs_[channel]->setRgbGain(r,g,b);
+        if(channel>=0 && channel<2) {
+            outputs_[channel]->setRgbGain(r,g,b);
+            gpuSettings_[channel].gains={r,g,b};
+            renderGpu();
+        }
     }
     void setWarpQuad(int channel,const QPolygonF& quad) {
-        if(channel>=0 && channel<2) outputs_[channel]->setWarpQuad(quad);
+        if(channel>=0 && channel<2) {
+            outputs_[channel]->setWarpQuad(quad);
+            gpuSettings_[channel].quad=quad;
+            renderGpu();
+        }
     }
 private:
     std::array<ProjectionWindow*,2> outputs_{};
@@ -230,6 +333,12 @@ private:
     QVideoSink sink_;
     bool loop_=true;
     D3D11Engine gpuEngine_;
+    D3D11Presenter presenter_{gpuEngine_};
+    std::array<GpuOutputWindow*,2> gpuWindows_{};
+    std::array<GpuCalibration,2> gpuSettings_{};
+    QImage gpuGrid_;
+    bool gpuMode_=false;
+    bool gpuTestMode_=true;
     bool gpuUploadEnabled_=false;
     QString gpuError_;
 };

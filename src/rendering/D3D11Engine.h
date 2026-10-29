@@ -12,6 +12,9 @@ public:
     bool uploadFrame(const QImage& frame, QString& error);
     bool isReady() const { return device_.Get()!=nullptr; }
     QString description() const;
+    ID3D11Device* device() const { return device_.Get(); }
+    ID3D11DeviceContext* context() const { return context_.Get(); }
+    ID3D11ShaderResourceView* videoView() const { return videoView_.Get(); }
     std::uint64_t uploadedFrames() const { return uploadedFrames_; }
     std::uint64_t uploadedBytes() const { return uploadedBytes_; }
 

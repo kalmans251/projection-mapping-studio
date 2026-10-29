@@ -99,7 +99,7 @@ private:
 class MainWindow final : public QMainWindow {
 public:
     MainWindow() {
-        setWindowTitle("Projection Mapping Studio — v0.5");
+        setWindowTitle("Projection Mapping Studio — v0.6");
         resize(1040, 660);
         auto* central = new QWidget;
         auto* root = new QVBoxLayout(central);
@@ -253,7 +253,7 @@ public:
 
         auto* gpuTab = new QWidget;
         auto* gpuLayout = new QVBoxLayout(gpuTab);
-        gpuLayout->addWidget(new QLabel("Direct3D 11 diagnostics — v0.5 foundation (NOT yet the video output backend)."));
+        gpuLayout->addWidget(new QLabel("Direct3D 11 hardware renderer (experimental). CPU/Qt renderer remains the default."));
         auto* initGpu = new QPushButton("Initialize D3D11 hardware GPU");
         auto* uploadToggle = new QCheckBox("Upload decoded video frames to a GPU texture (diagnostic)");
         uploadToggle->setEnabled(false);
@@ -261,10 +261,12 @@ public:
         gpuStatus->setWordWrap(true);
         gpuLayout->addWidget(initGpu);
         gpuLayout->addWidget(uploadToggle);
+        auto* gpuModeToggle = new QCheckBox("Use experimental D3D11 renderer for both projector outputs");
+        gpuLayout->addWidget(gpuModeToggle);
         gpuLayout->addWidget(gpuStatus);
-        gpuLayout->addWidget(new QLabel("Projector output still uses the existing Qt renderer. GPU upload is optional and off by default."));
+        gpuLayout->addWidget(new QLabel("Changing renderer closes the output windows. Re-open test patterns in Projectors. GPU mode is not genlocked."));
         gpuLayout->addStretch();
-        tabs->addTab(gpuTab,"GPU diagnostics");
+        tabs->addTab(gpuTab,"GPU renderer");
         connect(initGpu,&QPushButton::clicked,this,[this,uploadToggle,gpuStatus] {
             QString error;
             if(!output_.initializeGpu(error)) {
@@ -277,6 +279,19 @@ public:
         });
         connect(uploadToggle,&QCheckBox::toggled,this,[this](bool enabled){
             output_.setGpuUploadEnabled(enabled);
+        });
+        connect(gpuModeToggle,&QCheckBox::toggled,this,[this,gpuModeToggle,gpuStatus](bool enabled){
+            QString error;
+            if(!output_.setGpuMode(enabled,error)) {
+                QMessageBox::warning(this,"GPU renderer",error);
+                QSignalBlocker blocker(gpuModeToggle);
+                gpuModeToggle->setChecked(false);
+                gpuStatus->setText(error);
+                return;
+            }
+            gpuStatus->setText(output_.gpuStatus());
+            QMessageBox::information(this,"Renderer changed",
+                 "Projector windows were closed. Use Projectors > Open warped test patterns to reopen them.");
         });
         auto* gpuTimer = new QTimer(this);
         connect(gpuTimer,&QTimer::timeout,this,[this,gpuStatus]{
