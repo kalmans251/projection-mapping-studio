@@ -2,6 +2,7 @@
 #include <array>
 #include <cmath>
 #include <algorithm>
+#include <functional>
 #include "OutputController.h"
 
 struct MappingSettings {
@@ -10,8 +11,8 @@ struct MappingSettings {
     int brightness = 100;
 
     MappingSettings() {
-        quads[0] << QPointF(.05,.15) << QPointF(.56,.10) << QPointF(.53,.88) << QPointF(.07,.84);
-        quads[1] << QPointF(.45,.10) << QPointF(.95,.15) << QPointF(.93,.84) << QPointF(.47,.88);
+        quads[0] << QPointF(.02,.02) << QPointF(.98,.02) << QPointF(.98,.98) << QPointF(.02,.98);
+        quads[1] << QPointF(.02,.02) << QPointF(.98,.02) << QPointF(.98,.98) << QPointF(.02,.98);
     }
 };
 
@@ -24,10 +25,12 @@ public:
         setCursor(Qt::CrossCursor);
     }
     void setSelectedProjector(int index) { selected_ = index; update(); }
+    void setChangedCallback(std::function<void(int,const QPolygonF&)> callback) { onChanged_ = std::move(callback); }
 private:
     MappingSettings& settings_;
     int selected_ = 0;
     int dragging_ = -1;
+    std::function<void(int,const QPolygonF&)> onChanged_;
 
     QRectF area() const { return rect().adjusted(28, 28, -28, -28); }
     QPointF screenPoint(const QPointF& p) const {
@@ -85,6 +88,7 @@ private:
     void mouseMoveEvent(QMouseEvent* event) override {
         if(dragging_ < 0) return;
         settings_.quads[selected_][dragging_] = normalizedPoint(event->position());
+        if(onChanged_) onChanged_(selected_,settings_.quads[selected_]);
         update();
     }
     void mouseReleaseEvent(QMouseEvent*) override { dragging_ = -1; }
@@ -106,7 +110,7 @@ public:
         titleFont.setBold(true);
         title->setFont(titleFont);
         root->addWidget(title);
-        auto* notice = new QLabel("Calibration UI prototype · HDMI playback and edge blending are not yet implemented");
+        auto* notice = new QLabel("Live 4-point warp + overlap brightness fade (CPU preview). Physical alignment and gamma calibration required.");
         notice->setStyleSheet("color:#9ca3af");
         root->addWidget(notice);
 
@@ -115,6 +119,7 @@ public:
         auto* calibration = new QWidget;
         auto* calibrationLayout = new QHBoxLayout(calibration);
         preview_ = new MappingPreview(settings_);
+        preview_->setChangedCallback([this](int channel,const QPolygonF& quad){output_.setWarpQuad(channel,quad);});
         calibrationLayout->addWidget(preview_, 3);
         auto* controls = new QWidget;
         controls->setMinimumWidth(240);
@@ -139,7 +144,7 @@ public:
             return slider;
         };
         blendSlider_ = addSlider("Overlap width (split preview)",40,settings_.blend,[this](int v){settings_.blend=v; output_.setOverlap(v);});
-        brightnessSlider_ = addSlider("Brightness (preview value)",100,settings_.brightness,[this](int v){settings_.brightness=v;});
+        brightnessSlider_ = addSlider("Output brightness",100,settings_.brightness,[this](int v){settings_.brightness=v; output_.setBrightness(v);});
         auto* reset = new QPushButton("Reset calibration");
         side->addSpacing(12);
         side->addWidget(reset);
@@ -147,6 +152,7 @@ public:
             settings_ = MappingSettings{};
             blendSlider_->setValue(settings_.blend);
             brightnessSlider_->setValue(settings_.brightness);
+            for(int i=0;i<2;++i) output_.setWarpQuad(i,settings_.quads[i]);
             preview_->update();
         });
         side->addStretch();
@@ -164,7 +170,7 @@ public:
         projectionLayout->addWidget(firstScreen_);
         projectionLayout->addWidget(new QLabel("Projector 2 display"));
         projectionLayout->addWidget(secondScreen_);
-        auto* showTest = new QPushButton("Open test patterns on selected displays");
+        auto* showTest = new QPushButton("Open warped test patterns on selected displays");
         auto* closeOutput = new QPushButton("Close projector windows");
         projectionLayout->addWidget(showTest);
         projectionLayout->addWidget(closeOutput);
@@ -188,7 +194,7 @@ public:
         mediaLayout->addWidget(pause);
         mediaLayout->addWidget(stop);
         mediaLayout->addWidget(loop);
-        mediaLayout->addWidget(new QLabel("Early preview: synchronized 2-way crop, no perspective warp or brightness blending yet."));
+        mediaLayout->addWidget(new QLabel("Warp and overlap fade are active. This CPU/Qt prototype is not frame-genlocked or color calibrated."));
         mediaLayout->addStretch();
         tabs->addTab(media,"Media");
 
@@ -305,6 +311,7 @@ private:
         loaded.blend = std::clamp(root.value("blendPercent").toInt(15),0,40);
         loaded.brightness = std::clamp(root.value("brightnessPercent").toInt(100),0,100);
         settings_ = loaded;
+        for(int i=0;i<2;++i) output_.setWarpQuad(i,settings_.quads[i]);
         blendSlider_->setValue(settings_.blend);
         brightnessSlider_->setValue(settings_.brightness);
         preview_->update();
