@@ -7,6 +7,7 @@
 #include <array>
 #include "rendering/D3D11Engine.h"
 #include "rendering/D3D11Presenter.h"
+#include "media/VideoTransform.h"
 #include <algorithm>
 #include <cmath>
 
@@ -162,22 +163,8 @@ public:
             if(!frame.isValid()) return;
             const QImage image=frame.toImage();
             if(image.isNull()) return;
-            if(gpuMode_) {
-                if(!gpuTestMode_) {
-                    QString error;
-                    if(!gpuEngine_.uploadFrame(image,error)) gpuError_=error;
-                    else renderGpu();
-                }
-            } else {
-                if(gpuUploadEnabled_) {
-                    QString error;
-                    if(!gpuEngine_.uploadFrame(image,error)) {
-                        gpuUploadEnabled_=false;
-                        gpuError_=error;
-                    }
-                }
-                for(auto* output:outputs_) output->setFrame(image);
-            }
+            lastDecodedFrame_=image;
+            presentDecodedFrame();
         });
         connect(&player_,&QMediaPlayer::mediaStatusChanged,this,[this](QMediaPlayer::MediaStatus status){
             if(status==QMediaPlayer::EndOfMedia && loop_) {
@@ -295,6 +282,11 @@ public:
         player_.setSource(QUrl::fromLocalFile(path));
         player_.play();
     }
+    void setVideoTransform(int rotation,int scaleMode) {
+        videoOptions_.rotationDegrees=(rotation==90||rotation==180||rotation==270) ? rotation : 0;
+        videoOptions_.scaleMode=std::clamp(scaleMode,0,2);
+        presentDecodedFrame();
+    }
     void pause() { player_.pause(); }
     void stop() { player_.stop(); }
     void setLoop(bool enabled) { loop_=enabled; }
@@ -328,6 +320,28 @@ public:
         }
     }
 private:
+    void presentDecodedFrame() {
+        if(lastDecodedFrame_.isNull()) return;
+        QImage canvas=makeProjectionCanvas(lastDecodedFrame_,videoOptions_);
+        if(canvas.isNull()) return;
+        if(gpuMode_) {
+            if(gpuTestMode_) return;
+            QString error;
+            if(!gpuEngine_.uploadFrame(canvas,error)) gpuError_=error;
+            else renderGpu();
+        } else {
+            if(gpuUploadEnabled_) {
+                QString error;
+                if(!gpuEngine_.uploadFrame(canvas,error)) {
+                    gpuUploadEnabled_=false;
+                    gpuError_=error;
+                }
+            }
+            for(auto* output:outputs_) output->setFrame(canvas);
+        }
+    }
+    QImage lastDecodedFrame_;
+    VideoTransformOptions videoOptions_;
     std::array<ProjectionWindow*,2> outputs_{};
     QMediaPlayer player_;
     QVideoSink sink_;

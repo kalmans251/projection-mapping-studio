@@ -17,6 +17,8 @@ jobs:
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
       - name: Build
         run: cmake --build build --config Release --parallel
+      - name: Test video transform
+        run: ctest --test-dir build -C Release --output-on-failure
       - name: Deploy Qt runtime
         shell: pwsh
         run: |

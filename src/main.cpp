@@ -10,6 +10,8 @@ struct MappingSettings {
     int blend = 15;
     int brightness = 100;
     int blendGammaTenths = 22;
+    int videoRotation = 0;
+    int videoScaleMode = 0;
     std::array<std::array<int,3>,2> rgbGains={{{100,100,100},{100,100,100}}};
 
     MappingSettings() {
@@ -99,7 +101,7 @@ private:
 class MainWindow final : public QMainWindow {
 public:
     MainWindow() {
-        setWindowTitle("Projection Mapping Studio — v0.6");
+        setWindowTitle("Projection Mapping Studio — v0.6.1");
         resize(1040, 660);
         auto* central = new QWidget;
         auto* root = new QVBoxLayout(central);
@@ -194,6 +196,25 @@ public:
         mediaLayout->addWidget(pause);
         mediaLayout->addWidget(stop);
         mediaLayout->addWidget(loop);
+        auto* rotationLabel = new QLabel("Video rotation");
+        rotationCombo_ = new QComboBox;
+        rotationCombo_->addItems({"0° — Original","90° — Clockwise","180°","270° — Counterclockwise"});
+        auto* scaleLabel = new QLabel("Aspect ratio");
+        scaleCombo_ = new QComboBox;
+        scaleCombo_->addItems({"Stretch — Legacy output","Fit — Show entire video","Fill — Crop edges"});
+        mediaLayout->addWidget(rotationLabel);
+        mediaLayout->addWidget(rotationCombo_);
+        mediaLayout->addWidget(scaleLabel);
+        mediaLayout->addWidget(scaleCombo_);
+        connect(rotationCombo_,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int index){
+            settings_.videoRotation=index*90;
+            output_.setVideoTransform(settings_.videoRotation,settings_.videoScaleMode);
+        });
+        connect(scaleCombo_,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int index){
+            settings_.videoScaleMode=index;
+            output_.setVideoTransform(settings_.videoRotation,settings_.videoScaleMode);
+        });
+
         mediaLayout->addWidget(new QLabel("Warp and overlap fade are active. This CPU/Qt prototype is not frame-genlocked or color calibrated."));
         mediaLayout->addStretch();
         tabs->addTab(media,"Media");
@@ -365,6 +386,8 @@ private:
     QComboBox* firstScreen_ = nullptr;
     QComboBox* secondScreen_ = nullptr;
     QLabel* selectedFile_ = nullptr;
+    QComboBox* rotationCombo_ = nullptr;
+    QComboBox* scaleCombo_ = nullptr;
     QString videoPath_;
     MappingPreview* preview_ = nullptr;
     QSlider* blendSlider_ = nullptr;
@@ -378,10 +401,12 @@ private:
         auto path = QFileDialog::getSaveFileName(this,"Save calibration", "mapping-settings.json","JSON (*.json)");
         if(path.isEmpty()) return;
         QJsonObject root;
-        root["version"] = 2;
+        root["version"] = 3;
         root["blendPercent"] = settings_.blend;
         root["brightnessPercent"] = settings_.brightness;
         root["blendGammaTenths"] = settings_.blendGammaTenths;
+        root["videoRotation"] = settings_.videoRotation;
+        root["videoScaleMode"] = settings_.videoScaleMode;
         QJsonArray gains;
         for(const auto& channel:settings_.rgbGains) gains.append(QJsonArray{channel[0],channel[1],channel[2]});
         root["rgbGains"] = gains;
@@ -410,7 +435,7 @@ private:
         }
         auto root = doc.object();
         auto projectors = root.value("projectors").toArray();
-        if((root.value("version").toInt()!=1 && root.value("version").toInt()!=2) || projectors.size()!=2) {
+        if((root.value("version").toInt()<1 || root.value("version").toInt()>3) || projectors.size()!=2) {
             QMessageBox::warning(this,"Load failed","Unsupported settings format."); return;
         }
         MappingSettings loaded;
@@ -432,7 +457,7 @@ private:
         }
         loaded.blend = std::clamp(root.value("blendPercent").toInt(15),0,40);
         loaded.brightness = std::clamp(root.value("brightnessPercent").toInt(100),0,100);
-        if(root.value("version").toInt()==2) {
+        if(root.value("version").toInt()>=2) {
             loaded.blendGammaTenths=std::clamp(root.value("blendGammaTenths").toInt(22),10,35);
             const auto gains=root.value("rgbGains").toArray();
             if(gains.size()!=2) { QMessageBox::warning(this,"Load failed","Invalid RGB settings."); return; }
@@ -444,6 +469,11 @@ private:
                     loaded.rgbGains[n][c]=std::clamp(channel[c].toInt(100),0,100);
                 }
             }
+        }
+        if(root.value("version").toInt()>=3) {
+            const int rotation=root.value("videoRotation").toInt(0);
+            loaded.videoRotation=(rotation==90||rotation==180||rotation==270)?rotation:0;
+            loaded.videoScaleMode=std::clamp(root.value("videoScaleMode").toInt(0),0,2);
         }
         settings_ = loaded;
         for(int i=0;i<2;++i) output_.setWarpQuad(i,settings_.quads[i]);
@@ -463,6 +493,9 @@ private:
                 colorSliders_[c]->setValue(gain);
                 colorLabels_[c]->setText(QString("%1: %2%").arg(QStringList{"Red","Green","Blue"}[c]).arg(gain));
             }
+        rotationCombo_->setCurrentIndex(settings_.videoRotation/90);
+        scaleCombo_->setCurrentIndex(settings_.videoScaleMode);
+        output_.setVideoTransform(settings_.videoRotation,settings_.videoScaleMode);
         preview_->update();
     }
 };
