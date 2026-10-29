@@ -81,7 +81,7 @@ private:
     }
     void applyBlendMask(QImage& image) const {
         const double sharedFraction=overlap_<=0 ? 0.0 : double(overlap_) / (50.0+overlap_/2.0);
-        const int rampPixels=std::min(image.width(),int(std::round(sharedFraction*image.width())));
+        const int rampPixels=(std::min)(image.width(),int(std::round(sharedFraction*image.width())));
         QPainter layerPainter(&image);
         layerPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
         if(rampPixels>0) {
