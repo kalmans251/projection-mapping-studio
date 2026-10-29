@@ -1,6 +1,8 @@
 #include <QtWidgets>
 #include <array>
 #include <cmath>
+#include <algorithm>
+#include "OutputController.h"
 
 struct MappingSettings {
     std::array<QPolygonF, 2> quads;
@@ -136,7 +138,7 @@ public:
                 [label, name, callback](int v) { label->setText(QString("%1: %2%").arg(name).arg(v)); callback(v); });
             return slider;
         };
-        blendSlider_ = addSlider("Blend width (preview value)",40,settings_.blend,[this](int v){settings_.blend=v;});
+        blendSlider_ = addSlider("Overlap width (split preview)",40,settings_.blend,[this](int v){settings_.blend=v; output_.setOverlap(v);});
         brightnessSlider_ = addSlider("Brightness (preview value)",100,settings_.brightness,[this](int v){settings_.brightness=v;});
         auto* reset = new QPushButton("Reset calibration");
         side->addSpacing(12);
@@ -151,12 +153,76 @@ public:
         calibrationLayout->addWidget(controls,1);
         tabs->addTab(calibration,"Mapping calibration");
 
-        auto* projectors = new QLabel("Display discovery and Direct3D output will be added in the next milestone.");
-        projectors->setAlignment(Qt::AlignCenter);
+        auto* projectors = new QWidget;
+        auto* projectionLayout = new QVBoxLayout(projectors);
+        projectionLayout->addWidget(new QLabel("Choose two different extended displays. Never select your management monitor unless intended."));
+        auto* refresh = new QPushButton("Refresh connected displays");
+        firstScreen_ = new QComboBox;
+        secondScreen_ = new QComboBox;
+        projectionLayout->addWidget(refresh);
+        projectionLayout->addWidget(new QLabel("Projector 1 display"));
+        projectionLayout->addWidget(firstScreen_);
+        projectionLayout->addWidget(new QLabel("Projector 2 display"));
+        projectionLayout->addWidget(secondScreen_);
+        auto* showTest = new QPushButton("Open test patterns on selected displays");
+        auto* closeOutput = new QPushButton("Close projector windows");
+        projectionLayout->addWidget(showTest);
+        projectionLayout->addWidget(closeOutput);
+        projectionLayout->addWidget(new QLabel("Press Esc inside a projector window to close it. Windows display mode must be Extend."));
+        projectionLayout->addStretch();
         tabs->addTab(projectors,"Projectors");
-        auto* media = new QLabel("FFmpeg playback and single-timeline splitting are planned.");
-        media->setAlignment(Qt::AlignCenter);
+
+        auto* media = new QWidget;
+        auto* mediaLayout = new QVBoxLayout(media);
+        selectedFile_ = new QLabel("No video selected");
+        selectedFile_->setWordWrap(true);
+        auto* choose = new QPushButton("Choose MP4 / video file...");
+        auto* play = new QPushButton("Play on both projector outputs");
+        auto* pause = new QPushButton("Pause");
+        auto* stop = new QPushButton("Stop playback");
+        auto* loop = new QCheckBox("Loop video");
+        loop->setChecked(true);
+        mediaLayout->addWidget(choose);
+        mediaLayout->addWidget(selectedFile_);
+        mediaLayout->addWidget(play);
+        mediaLayout->addWidget(pause);
+        mediaLayout->addWidget(stop);
+        mediaLayout->addWidget(loop);
+        mediaLayout->addWidget(new QLabel("Early preview: synchronized 2-way crop, no perspective warp or brightness blending yet."));
+        mediaLayout->addStretch();
         tabs->addTab(media,"Media");
+
+        auto refreshScreens = [this]() {
+            const auto names=output_.screenDescriptions();
+            firstScreen_->clear(); secondScreen_->clear();
+            firstScreen_->addItems(names); secondScreen_->addItems(names);
+            if(names.size()>1) firstScreen_->setCurrentIndex(1);
+            if(names.size()>2) secondScreen_->setCurrentIndex(2);
+            else if(!names.isEmpty()) secondScreen_->setCurrentIndex(0);
+        };
+        connect(refresh,&QPushButton::clicked,this,refreshScreens);
+        connect(showTest,&QPushButton::clicked,this,[this] {
+            QString error;
+            if(!output_.showOutputs(firstScreen_->currentIndex(),secondScreen_->currentIndex(),error)) {
+                QMessageBox::warning(this,"Display selection",error); return;
+            }
+            output_.testPattern();
+        });
+        connect(closeOutput,&QPushButton::clicked,this,[this]{output_.stopOutputs();});
+        connect(choose,&QPushButton::clicked,this,[this] {
+            const auto path=QFileDialog::getOpenFileName(this,"Choose video",QString(),"Video files (*.mp4 *.mov *.mkv *.avi);;All files (*)");
+            if(path.isEmpty()) return;
+            videoPath_=path;
+            selectedFile_->setText(path);
+        });
+        connect(play,&QPushButton::clicked,this,[this] {
+            if(videoPath_.isEmpty()) { QMessageBox::information(this,"Video","Choose a file first.");return; }
+            output_.playFile(videoPath_);
+        });
+        connect(pause,&QPushButton::clicked,this,[this]{output_.pause();});
+        connect(stop,&QPushButton::clicked,this,[this]{output_.stop();output_.testPattern();});
+        connect(loop,&QCheckBox::toggled,this,[this](bool enabled){output_.setLoop(enabled);});
+        refreshScreens();
         auto* actions = new QHBoxLayout;
         auto* save = new QPushButton("Save settings...");
         auto* load = new QPushButton("Load settings...");
@@ -175,6 +241,11 @@ public:
     }
 private:
     MappingSettings settings_;
+    OutputController output_;
+    QComboBox* firstScreen_ = nullptr;
+    QComboBox* secondScreen_ = nullptr;
+    QLabel* selectedFile_ = nullptr;
+    QString videoPath_;
     MappingPreview* preview_ = nullptr;
     QSlider* blendSlider_ = nullptr;
     QSlider* brightnessSlider_ = nullptr;
