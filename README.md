@@ -1,53 +1,47 @@
 # Projection Mapping Studio
 
-Windows용 C++20 / Qt 6 기반 멀티 프로젝터 맵핑 프로토타입.
+Windows용 C++20 / Qt 6 멀티 프로젝터 매핑 프로토타입.
 
-## v0.3 새 기능
+## v0.4 기능
 
-- 프로젝터별 **4점 퍼스펙티브 워핑**: Mapping calibration 탭에서 각 꼭짓점을 움직이면 실제 전체 화면 출력에도 즉시 반영
-- 두 프로젝터가 공유하는 원본 영상 구간의 **밝기 페이드**: 겹침 폭(0~40%)에 따른 좌우 가중치 조정
-- 출력 밝기 슬라이더 실시간 반영
-- 프로젝터별 격자 테스트를 실제 변환으로 표시
-- 기존 v0.2의 디스플레이 선택, MP4 파일 재생, 반복 재생, JSON 설정 저장/로드 유지
-- Windows Actions 빌드 및 실행 파일 번들
+- Windows 확장 디스플레이에서 프로젝터 두 대 선택 및 출력
+- Qt Multimedia 단일 영상 타임라인 → 좌우 영상 영역 동시 출력
+- 4점 실시간 퍼스펙티브 워핑 및 보정 격자
+- 겹침 영역 밝기 페이드 및 블렌딩 감마(1.0~3.5) 조절
+- 프로젝터별 RGB 감쇠(0~100%)로 색상/밝기 맞춤
+- JSON 보정값 저장·로드 (v1 및 v2 설정 파일 읽기 지원)
+- GitHub Actions Windows 빌드 및 실행 파일 ZIP 아티팩트
 
-### 제한 사항
+### 중요 제약
 
-이 버전은 **Qt QPainter 기반 CPU 프로토타입**입니다. 프로젝트ive 워핑과 화면별 밝기 페이드가 작동하지만, 하드웨어 동기화·GPU Direct3D 11/HLSL 최적화·정밀 감마/블랙레벨/색상 보정은 아직 없습니다. 두 프로젝터의 **실제 빛이 겹치는 영역**을 현장에서 먼저 정렬해야 합니다. 전형적인 밝기 페이드만으로 완전히 보이지 않는 경계가 보장되지는 않습니다.
+현재 구현은 Qt QPainter CPU 영상 처리 방식입니다. Direct3D 11/HLSL 최적화, 하드웨어 프레임 동기화 및 정밀 컬러 캘리브레이션은 별도 개발이 필요합니다. RGB는 밝기를 줄일 수만 있고 100% 이상 증폭하지 않습니다. **블랙 레벨 보정은 미구현**이며 프로젝터의 광학적 검은색 누설광을 소프트웨어가 제거할 수 없습니다.
 
-프로젝터 보정점은 각 출력 화면의 **정규화 좌표(0~1)** 이며, 두 프로젝터를 각각 선택해 독립적으로 조정합니다. v0.2 설정 JSON을 가져왔다면 이전 좌표계에 맞춘 값이므로 **Reset calibration** 후 다시 설정하세요.
+### 빌드
 
-## 환경
-
-- Windows 10/11, Visual Studio 2022, CMake 3.24+
-- Qt 6.5 이상 MSVC 2022 64-bit, **Qt Multimedia** 모듈
-- Windows 디스플레이 설정: **확장** 모드
-- 권장: 관리용 모니터 1대 + 빔프로젝터 2대
-
-## 빌드 (Qt 6.12.0)
+Visual Studio 2022, Qt 6.12.0 **MSVC 2022 64-bit + Multimedia**, CMake 3.24+가 필요합니다.
 
 ```powershell
+git pull origin main
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="C:/Qt/6.12.0/msvc2022_64"
 cmake --build build --config Release
 & "C:\Qt\6.12.0\msvc2022_64\bin\windeployqt.exe" --release ".\build\Release\ProjectionMappingStudio.exe"
 .\build\Release\ProjectionMappingStudio.exe
 ```
 
-## 현장 보정 절차
+### 현장 사용법
 
-1. **Projectors** 탭에서 서로 다른 두 프로젝터 디스플레이 선택
-2. **Open warped test patterns** 실행
-3. **Mapping calibration**에서 Projector 1 선택 후 네 꼭짓점을 움직여 첫 번째 투사 영역 정렬
-4. Projector 2 선택 후 똑같이 정렬
-5. 두 프로젝터의 영상이 겹치도록 실제 설치 위치를 조정하고 **Overlap width**로 공유 영상 폭 조정
-6. 실제 바닥에서 겹침 영역의 밝기를 확인하며 두 위치와 밝기를 미세 조정
-7. **Save settings**로 저장하고 **Media** 탭에서 MP4 선택 후 재생
+1. Windows 디스플레이 확장 모드. 노트북 관리자 화면 외 프로젝터 2대 선택.
+2. Projectors → **Open warped test patterns**.
+3. Mapping calibration → Projector 1/2 각각 네 꼭짓점을 움직여 실제 격자 정렬.
+4. **Save settings**로 현재 좌표 백업.
+5. Media → 영상 파일 선택·재생. 밝은 장면에서 Overlap width를 조절.
+6. **Color & Blend** → Blend gamma(처음 2.2) 조정. 경계가 밝으면 인접 구간을 어둡게, 어두우면 반대로 조절.
+7. Color & Blend → Projector 1/2의 Red/Green/Blue 값을 조금씩 낮춰 색상·밝기 일치.
+8. 마지막 설정 저장. 이전 v0.3 JSON은 읽기 지원하며 새 보정값은 v2 형식으로 저장.
 
-*Esc*로 프로젝터 출력창을 닫거나 Projectors 탭의 Close projector windows 사용.
+### 다음 과제
 
-## 다음 개발
-
-- Direct3D 11 / HLSL GPU 워프·블렌드 파이프라인
-- 감마·블랙레벨·색상 차이 정밀 보정
-- 프로젝터 장치 식별자 지속 저장, 분리/재연결 대응
-- 디스플레이 프레젠테이션 시각 동기화와 장시간 안정성 테스트
+- Direct3D 11 GPU 파이프라인
+- 정밀 감마, 블랙 레벨, 색상 교정 및 프로젝터별 LUT
+- EDID 기반 디스플레이 연결 안정화 및 재연결
+- 장시간 재생·현장 캘리브레이션 검증

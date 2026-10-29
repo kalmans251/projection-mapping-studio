@@ -9,6 +9,8 @@ struct MappingSettings {
     std::array<QPolygonF, 2> quads;
     int blend = 15;
     int brightness = 100;
+    int blendGammaTenths = 22;
+    std::array<std::array<int,3>,2> rgbGains={{{100,100,100},{100,100,100}}};
 
     MappingSettings() {
         quads[0] << QPointF(.02,.02) << QPointF(.98,.02) << QPointF(.98,.98) << QPointF(.02,.98);
@@ -149,9 +151,7 @@ public:
         side->addSpacing(12);
         side->addWidget(reset);
         connect(reset,&QPushButton::clicked,this,[this]{
-            settings_ = MappingSettings{};
-            blendSlider_->setValue(settings_.blend);
-            brightnessSlider_->setValue(settings_.brightness);
+            settings_.quads = MappingSettings{}.quads;
             for(int i=0;i<2;++i) output_.setWarpQuad(i,settings_.quads[i]);
             preview_->update();
         });
@@ -197,6 +197,59 @@ public:
         mediaLayout->addWidget(new QLabel("Warp and overlap fade are active. This CPU/Qt prototype is not frame-genlocked or color calibrated."));
         mediaLayout->addStretch();
         tabs->addTab(media,"Media");
+
+        // Each projector can be attenuated independently to match its neighbor.
+        auto* colorTab = new QWidget;
+        auto* colorLayout = new QVBoxLayout(colorTab);
+        colorLayout->addWidget(new QLabel("Blend transition shape and projector RGB gain (attenuation only)."));
+        colorLayout->addWidget(new QLabel("Blend gamma: 1.0 = linear alpha; 2.2 = approximate optical compensation."));
+        auto* gammaText = new QLabel("Blend gamma: 2.2");
+        gammaSlider_ = new QSlider(Qt::Horizontal);
+        gammaSlider_->setRange(10,35);
+        gammaSlider_->setValue(settings_.blendGammaTenths);
+        colorLayout->addWidget(gammaText);
+        colorLayout->addWidget(gammaSlider_);
+        connect(gammaSlider_,&QSlider::valueChanged,this,[this,gammaText](int tenths){
+            settings_.blendGammaTenths=tenths;
+            gammaText->setText(QString("Blend gamma: %1").arg(tenths/10.0,0,'f',1));
+            output_.setBlendGamma(tenths/10.0);
+        });
+
+        colorProjector_ = new QComboBox;
+        colorProjector_->addItems({"Projector 1","Projector 2"});
+        colorLayout->addWidget(new QLabel("Adjust RGB intensity of selected projector"));
+        colorLayout->addWidget(colorProjector_);
+        const QString channelLabels[3]={"Red","Green","Blue"};
+        for(int c=0;c<3;++c) {
+            auto* label=new QLabel(channelLabels[c]+": 100%");
+            auto* slider=new QSlider(Qt::Horizontal);
+            slider->setRange(0,100);
+            slider->setValue(100);
+            colorLabels_[c]=label;
+            colorSliders_[c]=slider;
+            colorLayout->addWidget(label);
+            colorLayout->addWidget(slider);
+            connect(slider,&QSlider::valueChanged,this,[this,c](int value){
+                const int channel=colorProjector_->currentIndex();
+                if(channel<0 || channel>1) return;
+                settings_.rgbGains[channel][c]=value;
+                colorLabels_[c]->setText(QString("%1: %2%").arg(QStringList{"Red","Green","Blue"}[c]).arg(value));
+                const auto& gains=settings_.rgbGains[channel];
+                output_.setRgbGain(channel,gains[0],gains[1],gains[2]);
+            });
+        }
+        connect(colorProjector_,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int channel){
+            if(channel<0||channel>1) return;
+            for(int c=0;c<3;++c) {
+                QSignalBlocker blocker(colorSliders_[c]);
+                const int gain=settings_.rgbGains[channel][c];
+                colorSliders_[c]->setValue(gain);
+                colorLabels_[c]->setText(QString("%1: %2%").arg(QStringList{"Red","Green","Blue"}[c]).arg(gain));
+            }
+        });
+        colorLayout->addWidget(new QLabel("Black-level mismatch cannot be eliminated by dimming. Test with dark content."));
+        colorLayout->addStretch();
+        tabs->addTab(colorTab,"Color & Blend");
 
         auto refreshScreens = [this]() {
             const auto names=output_.screenDescriptions();
@@ -268,14 +321,22 @@ private:
     MappingPreview* preview_ = nullptr;
     QSlider* blendSlider_ = nullptr;
     QSlider* brightnessSlider_ = nullptr;
+    QSlider* gammaSlider_ = nullptr;
+    QComboBox* colorProjector_ = nullptr;
+    std::array<QSlider*,3> colorSliders_{};
+    std::array<QLabel*,3> colorLabels_{};
 
     void saveSettings() {
         auto path = QFileDialog::getSaveFileName(this,"Save calibration", "mapping-settings.json","JSON (*.json)");
         if(path.isEmpty()) return;
         QJsonObject root;
-        root["version"] = 1;
+        root["version"] = 2;
         root["blendPercent"] = settings_.blend;
         root["brightnessPercent"] = settings_.brightness;
+        root["blendGammaTenths"] = settings_.blendGammaTenths;
+        QJsonArray gains;
+        for(const auto& channel:settings_.rgbGains) gains.append(QJsonArray{channel[0],channel[1],channel[2]});
+        root["rgbGains"] = gains;
         QJsonArray projectors;
         for(const auto& quad : settings_.quads) {
             QJsonArray points;
@@ -301,7 +362,7 @@ private:
         }
         auto root = doc.object();
         auto projectors = root.value("projectors").toArray();
-        if(root.value("version").toInt()!=1 || projectors.size()!=2) {
+        if((root.value("version").toInt()!=1 && root.value("version").toInt()!=2) || projectors.size()!=2) {
             QMessageBox::warning(this,"Load failed","Unsupported settings format."); return;
         }
         MappingSettings loaded;
@@ -323,10 +384,37 @@ private:
         }
         loaded.blend = std::clamp(root.value("blendPercent").toInt(15),0,40);
         loaded.brightness = std::clamp(root.value("brightnessPercent").toInt(100),0,100);
+        if(root.value("version").toInt()==2) {
+            loaded.blendGammaTenths=std::clamp(root.value("blendGammaTenths").toInt(22),10,35);
+            const auto gains=root.value("rgbGains").toArray();
+            if(gains.size()!=2) { QMessageBox::warning(this,"Load failed","Invalid RGB settings."); return; }
+            for(int n=0;n<2;++n) {
+                const auto channel=gains[n].toArray();
+                if(channel.size()!=3) { QMessageBox::warning(this,"Load failed","Invalid RGB channel count."); return; }
+                for(int c=0;c<3;++c) {
+                    if(!channel[c].isDouble()) { QMessageBox::warning(this,"Load failed","Invalid RGB value."); return; }
+                    loaded.rgbGains[n][c]=std::clamp(channel[c].toInt(100),0,100);
+                }
+            }
+        }
         settings_ = loaded;
         for(int i=0;i<2;++i) output_.setWarpQuad(i,settings_.quads[i]);
         blendSlider_->setValue(settings_.blend);
         brightnessSlider_->setValue(settings_.brightness);
+        gammaSlider_->setValue(settings_.blendGammaTenths);
+        output_.setBlendGamma(settings_.blendGammaTenths/10.0);
+        for(int n=0;n<2;++n) {
+            const auto& gain=settings_.rgbGains[n];
+            output_.setRgbGain(n,gain[0],gain[1],gain[2]);
+        }
+        const int active=colorProjector_->currentIndex();
+        if(active>=0 && active<2)
+            for(int c=0;c<3;++c) {
+                QSignalBlocker blocker(colorSliders_[c]);
+                const int gain=settings_.rgbGains[active][c];
+                colorSliders_[c]->setValue(gain);
+                colorLabels_[c]->setText(QString("%1: %2%").arg(QStringList{"Red","Green","Blue"}[c]).arg(gain));
+            }
         preview_->update();
     }
 };

@@ -24,6 +24,11 @@ public:
     void setTestMode(bool test) { test_ = test; update(); }
     void setOverlapPercent(int percent) { overlap_ = std::clamp(percent,0,40); update(); }
     void setBrightnessPercent(int percent) { brightness_ = std::clamp(percent,0,100); update(); }
+    void setBlendGamma(double gamma) { gamma_ = std::clamp(gamma,1.0,3.5); update(); }
+    void setRgbGain(int r,int g,int b) {
+        gains_={std::clamp(r,0,100),std::clamp(g,0,100),std::clamp(b,0,100)};
+        update();
+    }
     void setWarpQuad(const QPolygonF& quad) {
         if(quad.size()!=4) return;
         quad_ = quad;
@@ -49,6 +54,7 @@ protected:
         const int x0 = std::clamp(int(std::floor(sourceLeft*source.width())),0,source.width()-1);
         const int x1 = std::clamp(int(std::ceil(sourceRight*source.width())),x0+1,source.width());
         QImage segment = source.copy(x0,0,x1-x0,source.height()).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        applyColorGain(segment);
         applyBlendMask(segment);
 
         QPolygonF destination;
@@ -63,6 +69,15 @@ protected:
         painter.drawImage(QPointF(0,0),segment);
     }
 private:
+    void applyColorGain(QImage& image) const {
+        if(gains_[0]==100 && gains_[1]==100 && gains_[2]==100) return;
+        QPainter painter(&image);
+        painter.setCompositionMode(QPainter::CompositionMode_Multiply);
+        painter.fillRect(image.rect(), QColor(
+            int(std::round(gains_[0]*2.55)),
+            int(std::round(gains_[1]*2.55)),
+            int(std::round(gains_[2]*2.55))));
+    }
     void applyBlendMask(QImage& image) const {
         const double sharedFraction=overlap_<=0 ? 0.0 : double(overlap_) / (50.0+overlap_/2.0);
         const int rampPixels=std::min(image.width(),int(std::round(sharedFraction*image.width())));
@@ -77,7 +92,7 @@ private:
                 // Approximate gamma-aware luminance weighting; projector black levels
                 // and color matching require later on-site calibration.
                 const double contribution=channel_==0 ? (1.0-t) : t;
-                const int alpha=int(std::round(255.0*std::pow(contribution,1.0/2.2)));
+                const int alpha=int(std::round(255.0*std::pow(contribution,1.0/gamma_)));
                 gradient.setColorAt(t,QColor(255,255,255,alpha));
             }
             layerPainter.fillRect(channel_==0 ? QRect(image.width()-rampPixels,0,rampPixels,image.height())
@@ -103,6 +118,8 @@ private:
     int channel_;
     int overlap_=15;
     int brightness_=100;
+    double gamma_=2.2;
+    std::array<int,3> gains_={100,100,100};
     bool test_=true;
     QPolygonF quad_;
     QImage frame_;
@@ -183,6 +200,10 @@ public:
     void setLoop(bool enabled) { loop_=enabled; }
     void setOverlap(int percent) { for(auto* output:outputs_) output->setOverlapPercent(percent); }
     void setBrightness(int percent) { for(auto* output:outputs_) output->setBrightnessPercent(percent); }
+    void setBlendGamma(double gamma) { for(auto* output:outputs_) output->setBlendGamma(gamma); }
+    void setRgbGain(int channel,int r,int g,int b) {
+        if(channel>=0 && channel<2) outputs_[channel]->setRgbGain(r,g,b);
+    }
     void setWarpQuad(int channel,const QPolygonF& quad) {
         if(channel>=0 && channel<2) outputs_[channel]->setWarpQuad(quad);
     }
