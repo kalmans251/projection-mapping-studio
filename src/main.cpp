@@ -208,8 +208,21 @@ public:
         };
         connect(refresh,&QPushButton::clicked,this,refreshScreens);
         connect(showTest,&QPushButton::clicked,this,[this] {
+            const auto screens=OutputController::screens();
+            const int first=firstScreen_->currentIndex(), second=secondScreen_->currentIndex();
+            if(first<0 || second<0 || first>=screens.size() || second>=screens.size() || first==second) {
+                QMessageBox::warning(this,"Display selection","Select two different connected displays.");
+                return;
+            }
+            if(screens[first]==QGuiApplication::primaryScreen() || screens[second]==QGuiApplication::primaryScreen()) {
+                const auto choice=QMessageBox::warning(this,"Primary screen selected",
+                    "One of the selected projector outputs is the primary (laptop) display.\n"
+                    "This would cover your settings window. Continue anyway?",
+                    QMessageBox::Yes|QMessageBox::No,QMessageBox::No);
+                if(choice!=QMessageBox::Yes) return;
+            }
             QString error;
-            if(!output_.showOutputs(firstScreen_->currentIndex(),secondScreen_->currentIndex(),error)) {
+            if(!output_.showOutputs(first,second,error)) {
                 QMessageBox::warning(this,"Display selection",error); return;
             }
             output_.testPattern();

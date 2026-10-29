@@ -13,7 +13,7 @@ class ProjectionWindow final : public QWidget {
 public:
     explicit ProjectionWindow(int channel) : channel_(channel) {
         setWindowTitle(QString("Projection Output %1").arg(channel + 1));
-        setWindowFlag(Qt::FramelessWindowHint);
+        setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
         setAttribute(Qt::WA_OpaquePaintEvent);
         setFocusPolicy(Qt::StrongFocus);
         quad_ << QPointF(.02,.02) << QPointF(.98,.02)
@@ -147,12 +147,27 @@ public:
         if(first<0||second<0||first>=list.size()||second>=list.size()||first==second) {
             error="Select two different, connected displays."; return false;
         }
+        // Windows can choose the primary display for showFullScreen() when the
+        // QWidget's native handle was created on another monitor. Instead,
+        // explicitly bind its QWindow and use a borderless window sized to the
+        // target screen's *logical desktop geometry*.
         for(auto* output:outputs_) output->hide();
         for(int i=0;i<2;++i) {
             QScreen* screen=list[i==0?first:second];
-            outputs_[i]->setScreen(screen);
-            outputs_[i]->showFullScreen();
-            outputs_[i]->raise();
+            ProjectionWindow* output=outputs_[i];
+            output->setWindowState(Qt::WindowNoState);
+            output->winId(); // Ensure a native QWindow exists before selecting the screen.
+            if(QWindow* handle=output->windowHandle()) handle->setScreen(screen);
+            output->setGeometry(screen->geometry());
+            output->show();
+            output->setGeometry(screen->geometry()); // Defend against OS window placement.
+            output->raise();
+            if(output->geometry()!=screen->geometry()) {
+                error=QString("Output %1 could not be placed on %2. Check Windows display scaling.")
+                          .arg(i+1).arg(screen->name());
+                stopOutputs();
+                return false;
+            }
         }
         return true;
     }
