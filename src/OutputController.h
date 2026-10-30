@@ -10,6 +10,7 @@
 #include "media/VideoTransform.h"
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 // Early CPU/Qt renderer. The two outputs share decoded frames, but hardware scanout is not genlocked.
 class ProjectionWindow final : public QWidget {
@@ -167,9 +168,9 @@ public:
             presentDecodedFrame();
         });
         connect(&player_,&QMediaPlayer::mediaStatusChanged,this,[this](QMediaPlayer::MediaStatus status){
-            if(status==QMediaPlayer::EndOfMedia && loop_) {
-                player_.setPosition(0);
-                player_.play();
+            if(status==QMediaPlayer::EndOfMedia) {
+                if(onPlaybackFinished_) onPlaybackFinished_();
+                else if(loop_) { player_.setPosition(0); player_.play(); }
             }
         });
     }
@@ -276,6 +277,7 @@ public:
             else renderGpu();
         } else for(auto* output:outputs_) output->setTestMode(true);
     }
+    void setPlaybackFinishedCallback(std::function<void()> callback) { onPlaybackFinished_=std::move(callback); }
     void playFile(const QString& path) {
         if(gpuMode_) gpuTestMode_=false;
         else for(auto* output:outputs_) output->setTestMode(false);
@@ -340,6 +342,7 @@ private:
             for(auto* output:outputs_) output->setFrame(canvas);
         }
     }
+    std::function<void()> onPlaybackFinished_;
     QImage lastDecodedFrame_;
     VideoTransformOptions videoOptions_;
     std::array<ProjectionWindow*,2> outputs_{};

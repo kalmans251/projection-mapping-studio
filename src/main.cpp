@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <functional>
 #include "OutputController.h"
+#include "PlaylistModel.h"
 
 struct MappingSettings {
     std::array<QPolygonF, 2> quads;
@@ -101,7 +102,7 @@ private:
 class MainWindow final : public QMainWindow {
 public:
     MainWindow() {
-        setWindowTitle("Projection Mapping Studio — v0.6.1");
+        setWindowTitle("Projection Mapping Studio — v0.7.0");
         resize(1040, 660);
         auto* central = new QWidget;
         auto* root = new QVBoxLayout(central);
@@ -182,39 +183,128 @@ public:
 
         auto* media = new QWidget;
         auto* mediaLayout = new QVBoxLayout(media);
-        selectedFile_ = new QLabel("No video selected");
-        selectedFile_->setWordWrap(true);
-        auto* choose = new QPushButton("Choose MP4 / video file...");
-        auto* play = new QPushButton("Play on both projector outputs");
-        auto* pause = new QPushButton("Pause");
-        auto* stop = new QPushButton("Stop playback");
-        auto* loop = new QCheckBox("Loop video");
-        loop->setChecked(true);
-        mediaLayout->addWidget(choose);
-        mediaLayout->addWidget(selectedFile_);
-        mediaLayout->addWidget(play);
-        mediaLayout->addWidget(pause);
-        mediaLayout->addWidget(stop);
-        mediaLayout->addWidget(loop);
-        auto* rotationLabel = new QLabel("Video rotation");
+        mediaLayout->addWidget(new QLabel("Playlist — one shared player for both projectors. Select a row to edit its rotation and aspect."));
+        playlistWidget_ = new QListWidget;
+        playlistWidget_->setSelectionMode(QAbstractItemView::SingleSelection);
+        mediaLayout->addWidget(playlistWidget_,1);
+        auto* fileButtons = new QHBoxLayout;
+        auto* addVideos = new QPushButton("Add videos...");
+        auto* removeVideo = new QPushButton("Remove");
+        auto* moveUp = new QPushButton("Move up");
+        auto* moveDown = new QPushButton("Move down");
+        fileButtons->addWidget(addVideos);
+        fileButtons->addWidget(removeVideo);
+        fileButtons->addWidget(moveUp);
+        fileButtons->addWidget(moveDown);
+        mediaLayout->addLayout(fileButtons);
+
+        auto* optionsRow = new QHBoxLayout;
         rotationCombo_ = new QComboBox;
         rotationCombo_->addItems({"0° — Original","90° — Clockwise","180°","270° — Counterclockwise"});
-        auto* scaleLabel = new QLabel("Aspect ratio");
         scaleCombo_ = new QComboBox;
         scaleCombo_->addItems({"Stretch — Legacy output","Fit — Show entire video","Fill — Crop edges"});
-        mediaLayout->addWidget(rotationLabel);
-        mediaLayout->addWidget(rotationCombo_);
-        mediaLayout->addWidget(scaleLabel);
-        mediaLayout->addWidget(scaleCombo_);
-        connect(rotationCombo_,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int index){
-            settings_.videoRotation=index*90;
-            output_.setVideoTransform(settings_.videoRotation,settings_.videoScaleMode);
-        });
-        connect(scaleCombo_,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int index){
-            settings_.videoScaleMode=index;
-            output_.setVideoTransform(settings_.videoRotation,settings_.videoScaleMode);
-        });
+        optionsRow->addWidget(new QLabel("Selected video rotation"));
+        optionsRow->addWidget(rotationCombo_);
+        optionsRow->addWidget(new QLabel("Aspect"));
+        optionsRow->addWidget(scaleCombo_);
+        mediaLayout->addLayout(optionsRow);
 
+        auto* transport = new QHBoxLayout;
+        auto* previous = new QPushButton("Previous");
+        auto* play = new QPushButton("Play selected");
+        auto* pause = new QPushButton("Pause");
+        auto* stop = new QPushButton("Stop");
+        auto* next = new QPushButton("Next");
+        transport->addWidget(previous);
+        transport->addWidget(play);
+        transport->addWidget(pause);
+        transport->addWidget(stop);
+        transport->addWidget(next);
+        mediaLayout->addLayout(transport);
+        repeatPlaylist_ = new QCheckBox("Repeat entire playlist");
+        repeatPlaylist_->setChecked(true);
+        mediaLayout->addWidget(repeatPlaylist_);
+        nowPlaying_ = new QLabel("Not playing");
+        mediaLayout->addWidget(nowPlaying_);
+
+        connect(addVideos,&QPushButton::clicked,this,[this] {
+            const auto paths=QFileDialog::getOpenFileNames(this,"Add videos",QString(),"Video files (*.mp4 *.mov *.mkv *.avi);;All files (*)");
+            if(paths.isEmpty()) return;
+            const int firstNew=playlist_.size();
+            for(const auto& path:paths)
+                playlist_.append({path,{settings_.videoRotation,settings_.videoScaleMode}});
+            refreshPlaylist(firstNew);
+        });
+        connect(removeVideo,&QPushButton::clicked,this,[this] {
+            const int row=playlistWidget_->currentRow();
+            if(row<0 || row>=playlist_.size()) return;
+            if(row==playingIndex_) {
+                output_.stop();
+                playingIndex_=-1;
+                nowPlaying_->setText("Not playing");
+            } else if(row<playingIndex_) --playingIndex_;
+            playlist_.removeAt(row);
+            refreshPlaylist((std::min)(row,playlist_.size()-1));
+        });
+        connect(moveUp,&QPushButton::clicked,this,[this] { movePlaylistItem(-1); });
+        connect(moveDown,&QPushButton::clicked,this,[this] { movePlaylistItem(1); });
+        connect(playlistWidget_,&QListWidget::currentRowChanged,this,[this](int row) {
+            const bool valid=row>=0 && row<playlist_.size();
+            rotationCombo_->setEnabled(valid);
+            scaleCombo_->setEnabled(valid);
+            if(!valid) return;
+            QSignalBlocker blockRotation(rotationCombo_),blockScale(scaleCombo_);
+            rotationCombo_->setCurrentIndex(playlist_[row].transform.rotationDegrees/90);
+            scaleCombo_->setCurrentIndex(playlist_[row].transform.scaleMode);
+        });
+        rotationCombo_->setEnabled(false);
+        scaleCombo_->setEnabled(false);
+        connect(rotationCombo_,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int index) {
+            const int row=playlistWidget_->currentRow();
+            if(row<0 || row>=playlist_.size()) return;
+            playlist_[row].transform.rotationDegrees=index*90;
+            settings_.videoRotation=index*90;
+            if(row==playingIndex_)
+                output_.setVideoTransform(index*90,playlist_[row].transform.scaleMode);
+            refreshPlaylist(row);
+        });
+        connect(scaleCombo_,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int index) {
+            const int row=playlistWidget_->currentRow();
+            if(row<0 || row>=playlist_.size()) return;
+            playlist_[row].transform.scaleMode=index;
+            settings_.videoScaleMode=index;
+            if(row==playingIndex_)
+                output_.setVideoTransform(playlist_[row].transform.rotationDegrees,index);
+            refreshPlaylist(row);
+        });
+        connect(play,&QPushButton::clicked,this,[this] {
+            int row=playlistWidget_->currentRow();
+            if(row<0 && !playlist_.isEmpty()) row=0;
+            if(row<0) { QMessageBox::information(this,"Playlist","Add videos first."); return; }
+            playPlaylistIndex(row);
+        });
+        connect(previous,&QPushButton::clicked,this,[this] {
+            if(playlist_.isEmpty()) return;
+            int row=playingIndex_>=0 ? playingIndex_-1 : playlistWidget_->currentRow()-1;
+            if(row<0) row=repeatPlaylist_->isChecked()?playlist_.size()-1:0;
+            playPlaylistIndex(row);
+        });
+        connect(next,&QPushButton::clicked,this,[this] {
+            if(playlist_.isEmpty()) return;
+            const int current=playingIndex_>=0 ? playingIndex_ : playlistWidget_->currentRow();
+            int row=nextPlaylistIndex(current,playlist_.size(),repeatPlaylist_->isChecked());
+            if(row>=0) playPlaylistIndex(row);
+            else { output_.stop(); playingIndex_=-1; nowPlaying_->setText("Playlist finished"); refreshPlaylist(); }
+        });
+        connect(pause,&QPushButton::clicked,this,[this]{ output_.pause(); });
+        connect(stop,&QPushButton::clicked,this,[this] {
+            output_.stop(); playingIndex_=-1; nowPlaying_->setText("Stopped"); refreshPlaylist(); output_.testPattern();
+        });
+        output_.setPlaybackFinishedCallback([this] {
+            const int next=nextPlaylistIndex(playingIndex_,playlist_.size(),repeatPlaylist_->isChecked());
+            if(next>=0) playPlaylistIndex(next);
+            else { playingIndex_=-1; nowPlaying_->setText("Playlist finished"); refreshPlaylist(); }
+        });
         mediaLayout->addWidget(new QLabel("Warp and overlap fade are active. This CPU/Qt prototype is not frame-genlocked or color calibrated."));
         mediaLayout->addStretch();
         tabs->addTab(media,"Media");
@@ -350,19 +440,6 @@ public:
             output_.testPattern();
         });
         connect(closeOutput,&QPushButton::clicked,this,[this]{output_.stopOutputs();});
-        connect(choose,&QPushButton::clicked,this,[this] {
-            const auto path=QFileDialog::getOpenFileName(this,"Choose video",QString(),"Video files (*.mp4 *.mov *.mkv *.avi);;All files (*)");
-            if(path.isEmpty()) return;
-            videoPath_=path;
-            selectedFile_->setText(path);
-        });
-        connect(play,&QPushButton::clicked,this,[this] {
-            if(videoPath_.isEmpty()) { QMessageBox::information(this,"Video","Choose a file first.");return; }
-            output_.playFile(videoPath_);
-        });
-        connect(pause,&QPushButton::clicked,this,[this]{output_.pause();});
-        connect(stop,&QPushButton::clicked,this,[this]{output_.stop();output_.testPattern();});
-        connect(loop,&QCheckBox::toggled,this,[this](bool enabled){output_.setLoop(enabled);});
         refreshScreens();
         auto* actions = new QHBoxLayout;
         auto* save = new QPushButton("Save settings...");
@@ -385,10 +462,13 @@ private:
     OutputController output_;
     QComboBox* firstScreen_ = nullptr;
     QComboBox* secondScreen_ = nullptr;
-    QLabel* selectedFile_ = nullptr;
     QComboBox* rotationCombo_ = nullptr;
     QComboBox* scaleCombo_ = nullptr;
-    QString videoPath_;
+    QListWidget* playlistWidget_ = nullptr;
+    QCheckBox* repeatPlaylist_ = nullptr;
+    QLabel* nowPlaying_ = nullptr;
+    QVector<PlaylistEntry> playlist_;
+    int playingIndex_ = -1;
     MappingPreview* preview_ = nullptr;
     QSlider* blendSlider_ = nullptr;
     QSlider* brightnessSlider_ = nullptr;
@@ -397,11 +477,59 @@ private:
     std::array<QSlider*,3> colorSliders_{};
     std::array<QLabel*,3> colorLabels_{};
 
+    void refreshPlaylist(int selected=-2) {
+        if(selected==-2) selected=playlistWidget_->currentRow();
+        QSignalBlocker blocker(playlistWidget_);
+        playlistWidget_->clear();
+        for(int i=0;i<playlist_.size();++i) {
+            const auto& entry=playlist_[i];
+            const QString rotation=QString::number(entry.transform.rotationDegrees);
+            const QString mode=QStringList{"Stretch","Fit","Fill"}.at(entry.transform.scaleMode);
+            playlistWidget_->addItem(QString("%1%2  %3  [%4°, %5]")
+                .arg(i==playingIndex_?"▶ ":"").arg(i+1).arg(QFileInfo(entry.path).fileName()).arg(rotation).arg(mode));
+            playlistWidget_->item(i)->setToolTip(entry.path);
+        }
+        if(selected>=0 && selected<playlist_.size()) playlistWidget_->setCurrentRow(selected);
+        const int row=playlistWidget_->currentRow();
+        const bool valid=row>=0 && row<playlist_.size();
+        rotationCombo_->setEnabled(valid);
+        scaleCombo_->setEnabled(valid);
+        if(valid) {
+            QSignalBlocker r(rotationCombo_),m(scaleCombo_);
+            rotationCombo_->setCurrentIndex(playlist_[row].transform.rotationDegrees/90);
+            scaleCombo_->setCurrentIndex(playlist_[row].transform.scaleMode);
+        }
+    }
+    void playPlaylistIndex(int row) {
+        if(row<0 || row>=playlist_.size()) return;
+        const auto& entry=playlist_[row];
+        if(!QFileInfo::exists(entry.path)) {
+            QMessageBox::warning(this,"Missing video","Video file does not exist:\\n"+entry.path);
+            return;
+        }
+        playingIndex_=row;
+        output_.setVideoTransform(entry.transform.rotationDegrees,entry.transform.scaleMode);
+        output_.playFile(entry.path);
+        nowPlaying_->setText("Now playing: "+QFileInfo(entry.path).fileName());
+        refreshPlaylist(row);
+    }
+    void movePlaylistItem(int offset) {
+        const int source=playlistWidget_->currentRow();
+        const int destination=source+offset;
+        if(source<0 || destination<0 || destination>=playlist_.size()) return;
+        playlist_.swapItemsAt(source,destination);
+        if(playingIndex_==source) playingIndex_=destination;
+        else if(playingIndex_==destination) playingIndex_=source;
+        refreshPlaylist(destination);
+    }
+
     void saveSettings() {
         auto path = QFileDialog::getSaveFileName(this,"Save calibration", "mapping-settings.json","JSON (*.json)");
         if(path.isEmpty()) return;
         QJsonObject root;
-        root["version"] = 3;
+        root["version"] = 4;
+        root["playlist"] = playlistToJson(playlist_);
+        root["repeatPlaylist"] = repeatPlaylist_->isChecked();
         root["blendPercent"] = settings_.blend;
         root["brightnessPercent"] = settings_.brightness;
         root["blendGammaTenths"] = settings_.blendGammaTenths;
@@ -435,7 +563,7 @@ private:
         }
         auto root = doc.object();
         auto projectors = root.value("projectors").toArray();
-        if((root.value("version").toInt()<1 || root.value("version").toInt()>3) || projectors.size()!=2) {
+        if((root.value("version").toInt()<1 || root.value("version").toInt()>4) || projectors.size()!=2) {
             QMessageBox::warning(this,"Load failed","Unsupported settings format."); return;
         }
         MappingSettings loaded;
@@ -475,6 +603,15 @@ private:
             loaded.videoRotation=(rotation==90||rotation==180||rotation==270)?rotation:0;
             loaded.videoScaleMode=std::clamp(root.value("videoScaleMode").toInt(0),0,2);
         }
+        QVector<PlaylistEntry> loadedPlaylist;
+        if(root.value("version").toInt()>=4 && !playlistFromJson(root.value("playlist"),loadedPlaylist)) {
+            QMessageBox::warning(this,"Load failed","Invalid playlist settings."); return;
+        }
+        output_.stop();
+        playingIndex_=-1;
+        playlist_=std::move(loadedPlaylist);
+        repeatPlaylist_->setChecked(root.value("repeatPlaylist").toBool(true));
+        nowPlaying_->setText("Not playing");
         settings_ = loaded;
         for(int i=0;i<2;++i) output_.setWarpQuad(i,settings_.quads[i]);
         blendSlider_->setValue(settings_.blend);
@@ -493,9 +630,7 @@ private:
                 colorSliders_[c]->setValue(gain);
                 colorLabels_[c]->setText(QString("%1: %2%").arg(QStringList{"Red","Green","Blue"}[c]).arg(gain));
             }
-        rotationCombo_->setCurrentIndex(settings_.videoRotation/90);
-        scaleCombo_->setCurrentIndex(settings_.videoScaleMode);
-        output_.setVideoTransform(settings_.videoRotation,settings_.videoScaleMode);
+        refreshPlaylist(playlist_.isEmpty()?-1:0);
         preview_->update();
     }
 };

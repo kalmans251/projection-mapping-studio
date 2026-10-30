@@ -2,6 +2,17 @@
 
 Windows C++20 + Qt 6 멀티 프로젝터 맵핑 프로그램.
 
+## v0.7.0 — 재생목록 및 영상별 회전/비율 설정
+
+- Media 탭에서 **Add videos...**로 여러 영상을 한꺼번에 등록
+- 목록의 각 영상을 선택해 0/90/180/270도 회전 및 Stretch/Fit/Fill을 개별 지정
+- Play selected 후 영상이 끝나면 자동 다음 영상으로 진행, Repeat entire playlist 옵션으로 전체 반복
+- Previous/Next/Pause/Stop, Remove, Move up/Move down 제공
+- Save settings에서 재생목록 경로, 순서, 개별 회전/비율, 반복 옵션을 JSON v4로 저장. 이전 v1~v3 설정도 열 수 있음
+- 영상 파일 자체는 JSON에 포함되지 않으므로 원본 경로를 유지해야 함
+- 출력 채널 2개는 동일한 QMediaPlayer 프레임을 공유하고 기존 워핑/블렌딩 보정은 계속 사용
+- **성능 주의:** 90° 회전은 아직 CPU 변환이므로 4K 영상에서 렉이 발생할 수 있음. 사전 로딩/무중단 전환도 추후 과제
+
 ## v0.6.1 — 세로형 영상 회전 및 비율 설정
 
 **Media** 탭에 아래 기능을 추가했습니다.
