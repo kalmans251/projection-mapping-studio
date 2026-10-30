@@ -102,7 +102,7 @@ private:
 class MainWindow final : public QMainWindow {
 public:
     MainWindow() {
-        setWindowTitle("Projection Mapping Studio — v0.7.0");
+        setWindowTitle("Projection Mapping Studio — v0.8.0");
         resize(1040, 660);
         auto* central = new QWidget;
         auto* root = new QVBoxLayout(central);
@@ -208,6 +208,14 @@ public:
         optionsRow->addWidget(new QLabel("Aspect"));
         optionsRow->addWidget(scaleCombo_);
         mediaLayout->addLayout(optionsRow);
+        auto* durationRow = new QHBoxLayout;
+        durationRow->addWidget(new QLabel("Selected video playback time"));
+        durationSpin_ = new QSpinBox;
+        durationSpin_->setRange(0,86400);
+        durationSpin_->setSuffix(" sec");
+        durationSpin_->setSpecialValueText("Full video (until end)");
+        durationRow->addWidget(durationSpin_);
+        mediaLayout->addLayout(durationRow);
 
         auto* transport = new QHBoxLayout;
         auto* previous = new QPushButton("Previous");
@@ -232,7 +240,7 @@ public:
             if(paths.isEmpty()) return;
             const int firstNew=playlist_.size();
             for(const auto& path:paths)
-                playlist_.append({path,{settings_.videoRotation,settings_.videoScaleMode}});
+                playlist_.append({path,{settings_.videoRotation,settings_.videoScaleMode},0});
             refreshPlaylist(firstNew);
         });
         connect(removeVideo,&QPushButton::clicked,this,[this] {
@@ -244,7 +252,7 @@ public:
                 nowPlaying_->setText("Not playing");
             } else if(row<playingIndex_) --playingIndex_;
             playlist_.removeAt(row);
-            refreshPlaylist((std::min)(row,playlist_.size()-1));
+            refreshPlaylist((std::min)(row,int(playlist_.size())-1));
         });
         connect(moveUp,&QPushButton::clicked,this,[this] { movePlaylistItem(-1); });
         connect(moveDown,&QPushButton::clicked,this,[this] { movePlaylistItem(1); });
@@ -252,13 +260,16 @@ public:
             const bool valid=row>=0 && row<playlist_.size();
             rotationCombo_->setEnabled(valid);
             scaleCombo_->setEnabled(valid);
+            durationSpin_->setEnabled(valid);
             if(!valid) return;
-            QSignalBlocker blockRotation(rotationCombo_),blockScale(scaleCombo_);
+            QSignalBlocker blockRotation(rotationCombo_),blockScale(scaleCombo_),blockDuration(durationSpin_);
+            durationSpin_->setValue(playlist_[row].durationSeconds);
             rotationCombo_->setCurrentIndex(playlist_[row].transform.rotationDegrees/90);
             scaleCombo_->setCurrentIndex(playlist_[row].transform.scaleMode);
         });
         rotationCombo_->setEnabled(false);
         scaleCombo_->setEnabled(false);
+        durationSpin_->setEnabled(false);
         connect(rotationCombo_,QOverload<int>::of(&QComboBox::currentIndexChanged),this,[this](int index) {
             const int row=playlistWidget_->currentRow();
             if(row<0 || row>=playlist_.size()) return;
@@ -275,6 +286,14 @@ public:
             settings_.videoScaleMode=index;
             if(row==playingIndex_)
                 output_.setVideoTransform(playlist_[row].transform.rotationDegrees,index);
+            refreshPlaylist(row);
+        });
+        connect(durationSpin_,QOverload<int>::of(&QSpinBox::valueChanged),this,[this](int seconds) {
+            const int row=playlistWidget_->currentRow();
+            if(row<0 || row>=playlist_.size()) return;
+            playlist_[row].durationSeconds=seconds;
+            if(row==playingIndex_)
+                nowPlaying_->setText("Duration updated (takes effect next time this video starts)");
             refreshPlaylist(row);
         });
         connect(play,&QPushButton::clicked,this,[this] {
@@ -464,6 +483,7 @@ private:
     QComboBox* secondScreen_ = nullptr;
     QComboBox* rotationCombo_ = nullptr;
     QComboBox* scaleCombo_ = nullptr;
+    QSpinBox* durationSpin_ = nullptr;
     QListWidget* playlistWidget_ = nullptr;
     QCheckBox* repeatPlaylist_ = nullptr;
     QLabel* nowPlaying_ = nullptr;
@@ -485,8 +505,9 @@ private:
             const auto& entry=playlist_[i];
             const QString rotation=QString::number(entry.transform.rotationDegrees);
             const QString mode=QStringList{"Stretch","Fit","Fill"}.at(entry.transform.scaleMode);
-            playlistWidget_->addItem(QString("%1%2  %3  [%4°, %5]")
-                .arg(i==playingIndex_?"▶ ":"").arg(i+1).arg(QFileInfo(entry.path).fileName()).arg(rotation).arg(mode));
+            playlistWidget_->addItem(QString("%1%2  %3  [%4°, %5, %6]")
+                .arg(i==playingIndex_?"▶ ":"").arg(i+1).arg(QFileInfo(entry.path).fileName()).arg(rotation).arg(mode)
+                .arg(entry.durationSeconds==0?"Full":QString::number(entry.durationSeconds)+" sec"));
             playlistWidget_->item(i)->setToolTip(entry.path);
         }
         if(selected>=0 && selected<playlist_.size()) playlistWidget_->setCurrentRow(selected);
@@ -494,8 +515,10 @@ private:
         const bool valid=row>=0 && row<playlist_.size();
         rotationCombo_->setEnabled(valid);
         scaleCombo_->setEnabled(valid);
+        durationSpin_->setEnabled(valid);
         if(valid) {
-            QSignalBlocker r(rotationCombo_),m(scaleCombo_);
+            QSignalBlocker r(rotationCombo_),m(scaleCombo_),d(durationSpin_);
+            durationSpin_->setValue(playlist_[row].durationSeconds);
             rotationCombo_->setCurrentIndex(playlist_[row].transform.rotationDegrees/90);
             scaleCombo_->setCurrentIndex(playlist_[row].transform.scaleMode);
         }
@@ -509,7 +532,7 @@ private:
         }
         playingIndex_=row;
         output_.setVideoTransform(entry.transform.rotationDegrees,entry.transform.scaleMode);
-        output_.playFile(entry.path);
+        output_.playFile(entry.path,entry.durationSeconds);
         nowPlaying_->setText("Now playing: "+QFileInfo(entry.path).fileName());
         refreshPlaylist(row);
     }
@@ -527,7 +550,7 @@ private:
         auto path = QFileDialog::getSaveFileName(this,"Save calibration", "mapping-settings.json","JSON (*.json)");
         if(path.isEmpty()) return;
         QJsonObject root;
-        root["version"] = 4;
+        root["version"] = 5;
         root["playlist"] = playlistToJson(playlist_);
         root["repeatPlaylist"] = repeatPlaylist_->isChecked();
         root["blendPercent"] = settings_.blend;
@@ -563,7 +586,7 @@ private:
         }
         auto root = doc.object();
         auto projectors = root.value("projectors").toArray();
-        if((root.value("version").toInt()<1 || root.value("version").toInt()>4) || projectors.size()!=2) {
+        if((root.value("version").toInt()<1 || root.value("version").toInt()>5) || projectors.size()!=2) {
             QMessageBox::warning(this,"Load failed","Unsupported settings format."); return;
         }
         MappingSettings loaded;

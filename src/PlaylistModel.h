@@ -10,6 +10,7 @@
 struct PlaylistEntry {
     QString path;
     VideoTransformOptions transform;
+    int durationSeconds = 0; // 0 means play the full file
 };
 
 inline QJsonArray playlistToJson(const QVector<PlaylistEntry>& entries) {
@@ -19,6 +20,7 @@ inline QJsonArray playlistToJson(const QVector<PlaylistEntry>& entries) {
         object["path"] = entry.path;
         object["rotation"] = entry.transform.rotationDegrees;
         object["scaleMode"] = entry.transform.scaleMode;
+        object["durationSeconds"] = entry.durationSeconds;
         result.append(object);
     }
     return result;
@@ -35,9 +37,10 @@ inline bool playlistFromJson(const QJsonValue& value, QVector<PlaylistEntry>& en
         if (path.isEmpty()) return false;
         const int rotation = object.value("rotation").toInt(0);
         const int mode = object.value("scaleMode").toInt(0);
+        const int seconds = object.value("durationSeconds").toInt(0);
         if ((rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270)
-            || mode < 0 || mode > 2) return false;
-        parsed.append({path, {rotation, mode}});
+            || mode < 0 || mode > 2 || seconds < 0 || seconds > 86400) return false;
+        parsed.append({path, {rotation, mode}, seconds});
     }
     entries = std::move(parsed);
     return true;

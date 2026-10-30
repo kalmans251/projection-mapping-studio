@@ -167,8 +167,18 @@ public:
             lastDecodedFrame_=image;
             presentDecodedFrame();
         });
+        connect(&player_,&QMediaPlayer::positionChanged,this,[this](qint64 position) {
+            if(playbackLimitMs_<=0 || advancing_ || position<playbackLimitMs_) return;
+            advancing_=true;
+            QTimer::singleShot(0,this,[this] {
+                if(!advancing_) return;
+                if(onPlaybackFinished_) onPlaybackFinished_();
+                else player_.stop();
+            });
+        });
         connect(&player_,&QMediaPlayer::mediaStatusChanged,this,[this](QMediaPlayer::MediaStatus status){
-            if(status==QMediaPlayer::EndOfMedia) {
+            if(status==QMediaPlayer::EndOfMedia && !advancing_) {
+                advancing_=true;
                 if(onPlaybackFinished_) onPlaybackFinished_();
                 else if(loop_) { player_.setPosition(0); player_.play(); }
             }
@@ -278,7 +288,9 @@ public:
         } else for(auto* output:outputs_) output->setTestMode(true);
     }
     void setPlaybackFinishedCallback(std::function<void()> callback) { onPlaybackFinished_=std::move(callback); }
-    void playFile(const QString& path) {
+    void playFile(const QString& path,int limitSeconds=0) {
+        advancing_=false;
+        playbackLimitMs_=qint64(std::clamp(limitSeconds,0,86400))*1000;
         if(gpuMode_) gpuTestMode_=false;
         else for(auto* output:outputs_) output->setTestMode(false);
         player_.setSource(QUrl::fromLocalFile(path));
@@ -290,7 +302,7 @@ public:
         presentDecodedFrame();
     }
     void pause() { player_.pause(); }
-    void stop() { player_.stop(); }
+    void stop() { advancing_=false; playbackLimitMs_=0; player_.stop(); }
     void setLoop(bool enabled) { loop_=enabled; }
     void setOverlap(int percent) {
         for(auto* output:outputs_) output->setOverlapPercent(percent);
@@ -343,6 +355,8 @@ private:
         }
     }
     std::function<void()> onPlaybackFinished_;
+    qint64 playbackLimitMs_=0;
+    bool advancing_=false;
     QImage lastDecodedFrame_;
     VideoTransformOptions videoOptions_;
     std::array<ProjectionWindow*,2> outputs_{};
